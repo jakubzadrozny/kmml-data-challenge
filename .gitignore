@@ -1,0 +1,14 @@
+__pycache__/
+.ipynb_checkpoints/
+.vscode/
+
+backup/
+data/
+models/
+results/
+kernels/
+
+challenge.ipynb
+compare.py
+
+substring
