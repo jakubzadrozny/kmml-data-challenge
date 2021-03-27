@@ -4,11 +4,10 @@ import os.path
 
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
 
 from data import DATA_PATH
 
-WORKERS = 1
+WORKERS = 8
 
 
 class GaussianKernel:
@@ -38,6 +37,25 @@ class PolyKernel:
         Kxx2 = (np.sum(X2 * X2, axis=-1) + self.c) ** self.p
         norm = np.sqrt(Kxx1[:, np.newaxis]) * np.sqrt(Kxx2[np.newaxis, :])
         return K / norm
+
+
+class SumKernel:
+    def __init__(self, kernels, weights=None):
+        self.kernels = kernels
+        self.weights = weights if weights is not None else np.ones(
+            len(kernels))
+
+    def __str__(self):
+        s = ""
+        for K in self.kernels:
+            s += str(K) + "+"
+        return "SumKernel({})".format(s)
+
+    def __call__(self, X1, X2, **kwargs):
+        Ks = [K(X1, X2, **kwargs) for K in self.kernels]
+        K = np.sum(self.weights[:, np.newaxis, np.newaxis]
+                   * np.stack(Ks, axis=0), axis=0)
+        return K
 
 
 class SpectrumKernel:
@@ -123,7 +141,7 @@ class SubstringKernel:
 
 
 class FastSubstringKernel:
-    AUX_PATH = "kernels/{d}-subst-alpha={alpha}-id={id}-k="
+    AUX_PATH = "kernels/{d}-subst-alpha={alpha}-{id}of{workers}-k="
 
     def __init__(self, d, k, alpha, normalize=None):
         self.d = d
@@ -144,22 +162,27 @@ class FastSubstringKernel:
         return bounds
 
     def __call__(self, *args):
+        os.makedirs(os.path.dirname(self.AUX_PATH), exist_ok=True)
         ps = []
         X = pd.read_csv(self.in_path)
         N = len(X)
         for id, (p, q) in enumerate(self._split_work(N)):
-            aux_path = self.AUX_PATH.format(d=self.d, alpha=self.alpha, id=id)
-            out_path = aux_path + str(self.k) + ".csv"
+            aux_path = self.AUX_PATH.format(
+                d=self.d, alpha=self.alpha, id=id, workers=WORKERS)
+            out_path = aux_path.format(id=id) + str(self.k) + ".csv"
             if not os.path.isfile(out_path):
                 ps.append(subprocess.Popen(
                     list(map(str, ["./substring", "train", self.in_path, aux_path, self.alpha, p, q]))))
         for p in ps:
             p.wait()
+            if (p.returncode != 0):
+                raise RuntimeError("The substring program crashed.")
 
         Ks = []
         for id, _ in enumerate(self._split_work(N)):
-            aux_path = self.AUX_PATH.format(d=self.d, alpha=self.alpha, id=id)
-            out_path = aux_path + str(self.k) + ".csv"
+            aux_path = self.AUX_PATH.format(
+                d=self.d, alpha=self.alpha, id=id, workers=WORKERS)
+            out_path = aux_path.format(id) + str(self.k) + ".csv"
             Ks.append(np.loadtxt(out_path, delimiter=','))
         K = np.concatenate(Ks, axis=0)
         KT = np.copy(K.T)
@@ -177,7 +200,7 @@ class FastSubstringKernel:
 
 
 class FastSubstringKernelTest:
-    AUX_PATH = "kernels/{d}-testsubst-alpha={alpha}-id={id}-k="
+    AUX_PATH = "kernels/{d}-subst-test-alpha={alpha}-{id}of{workers}-k="
 
     def _split_work(self, N):
         step = N // WORKERS
@@ -197,12 +220,13 @@ class FastSubstringKernelTest:
         return "Substring(k={k},alpha={alpha},norm={norm})".format(k=self.k, alpha=self.alpha, norm=self.normalize)
 
     def __call__(self, *args):
+        os.makedirs(os.path.dirname(self.AUX_PATH), exist_ok=True)
         ps = []
         X = pd.read_csv(self.in_path1)
         N = len(X)
         for id, (p, q) in enumerate(self._split_work(N)):
             aux_path = self.AUX_PATH.format(
-                d=self.d, alpha=self.alpha, id=id)
+                d=self.d, alpha=self.alpha, id=id, workers=WORKERS)
             out_path = aux_path + str(self.k) + ".csv"
             if not os.path.isfile(out_path):
                 ps.append(subprocess.Popen(
@@ -213,7 +237,7 @@ class FastSubstringKernelTest:
         Ks = []
         for id, _ in enumerate(self._split_work(N)):
             aux_path = self.AUX_PATH.format(
-                d=self.d, alpha=self.alpha, id=id)
+                d=self.d, alpha=self.alpha, id=id, workers=WORKERS)
             out_path = aux_path + str(self.k) + ".csv"
             Ks.append(np.loadtxt(out_path, delimiter=','))
         K = np.concatenate(Ks, axis=0)
@@ -233,7 +257,7 @@ class FastSubstringKernelTest:
 
 
 class FastSubstringKernelDiag:
-    AUX_PATH = "kernels/{d}-diag-subst-alpha={alpha}-k="
+    AUX_PATH = "kernels/{d}-subst-diag-alpha={alpha}-k="
 
     def __init__(self, d, k, alpha):
         self.d = d
@@ -242,6 +266,7 @@ class FastSubstringKernelDiag:
         self.in_path = DATA_PATH.format(tr_te='te', k=d, mat='')
 
     def __call__(self, *args):
+        os.makedirs(os.path.dirname(self.AUX_PATH), exist_ok=True)
         aux_path = self.AUX_PATH.format(d=self.d, alpha=self.alpha)
         out_path = aux_path + str(self.k) + ".csv"
         if not os.path.isfile(out_path):
@@ -254,22 +279,3 @@ class FastSubstringKernelDiag:
             self.d, k=self.k, alpha=self.alpha, normalize=None)()
         Kxx_train = np.diag(K_train)
         return Kxx_train, Kxx_test
-
-
-class SumKernel:
-    def __init__(self, kernels, weights=None):
-        self.kernels = kernels
-        self.weights = weights if weights is not None else np.ones(
-            len(kernels))
-
-    def __str__(self):
-        s = ""
-        for K in self.kernels:
-            s += str(K) + "+"
-        return "SumKernel({})".format(s)
-
-    def __call__(self, X1, X2, **kwargs):
-        Ks = [K(X1, X2, **kwargs) for K in self.kernels]
-        K = np.sum(self.weights[:, np.newaxis, np.newaxis]
-                   * np.stack(Ks, axis=0), axis=0)
-        return K

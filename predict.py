@@ -16,7 +16,7 @@ def make_predictions(dataset_id, model=None, model_path=None):
     X_train, _ = load_data(dataset_id)
     X_test = load_data(dataset_id, test=True)
 
-    kernel = kernels[dataset_id]
+    kernel = kernels[dataset_id][0]
     K = kernel(X_test, X_train, test=True)
 
     y_te = model.predict(K) > 0
